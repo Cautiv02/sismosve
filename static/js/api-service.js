@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Servicio para manejo de API y datos de sismos
  */
 
@@ -8,7 +8,7 @@ export class ApiService {
     constructor() {
         this.baseUrl = '';
         this.endpoints = {
-            sismos: '/api/sismos',
+            sismos: window.API_ENDPOINT || '/api/sismos',
             update: '/api/update',
             stats: '/api/sismos/stats',
             health: '/api/health'
@@ -30,7 +30,7 @@ export class ApiService {
             const data = await response.json();
             
             if (!ValidationUtils.isValidEarthquakeData(data)) {
-                throw new Error('Datos de sismos inválidos');
+                throw new Error('Datos de sismos invÃ¡lidos');
             }
 
             return data;
@@ -41,8 +41,8 @@ export class ApiService {
     }
 
     /**
-     * Obtiene estadísticas de sismos
-     * @returns {Promise<Object>} Estadísticas de sismos
+     * Obtiene estadÃ­sticas de sismos
+     * @returns {Promise<Object>} EstadÃ­sticas de sismos
      */
     async getStats() {
         try {
@@ -54,14 +54,14 @@ export class ApiService {
 
             return await response.json();
         } catch (error) {
-            console.error('Error al obtener estadísticas:', error);
+            console.error('Error al obtener estadÃ­sticas:', error);
             throw error;
         }
     }
 
     /**
-     * Fuerza actualización de datos
-     * @returns {Promise<Object>} Resultado de la actualización
+     * Fuerza actualizaciÃ³n de datos
+     * @returns {Promise<Object>} Resultado de la actualizaciÃ³n
      */
     async forceUpdate() {
         try {
@@ -78,7 +78,7 @@ export class ApiService {
 
             return await response.json();
         } catch (error) {
-            console.error('Error al forzar actualización:', error);
+            console.error('Error al forzar actualizaciÃ³n:', error);
             throw error;
         }
     }
@@ -142,8 +142,8 @@ export class DataManager {
     }
 
     /**
-     * Fuerza actualización de datos
-     * @returns {Promise<Object>} Resultado de la actualización
+     * Fuerza actualizaciÃ³n de datos
+     * @returns {Promise<Object>} Resultado de la actualizaciÃ³n
      */
     async forceUpdate() {
         const result = await this.apiService.forceUpdate();
@@ -172,8 +172,8 @@ export class DataManager {
     }
 
     /**
-     * Obtiene el número de sismos
-     * @returns {number} Número de sismos
+     * Obtiene el nÃºmero de sismos
+     * @returns {number} NÃºmero de sismos
      */
     getEarthquakeCount() {
         return this.hasData() ? this.currentData.features.length : 0;
