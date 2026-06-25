@@ -58,16 +58,43 @@ export class MapManager {
         const lat = parseFloat(feature.properties.lat);
         const lng = parseFloat(feature.properties.long);
         const magnitude = parseFloat(feature.properties.value) || 0;
-        const { color, radius } = MagnitudeUtils.getMarkerStyle(magnitude);
 
-        const marker = L.circleMarker([lat, lng], {
-            radius,
-            fillColor: color,
-            color: 'rgba(255,255,255,0.3)',
-            weight: 1.5,
-            opacity: 1,
-            fillOpacity: 0.85
-        });
+        let marker;
+
+        if (magnitude >= 6.0) {
+            const size  = magnitude >= 7.0 ? 42 : 32;
+            const color = magnitude >= 7.0 ? '#ef4444' : '#FFD700';
+            const glow  = magnitude >= 7.0
+                ? '0 0 8px rgba(239,68,68,0.9), 0 0 16px rgba(239,68,68,0.5)'
+                : '0 0 8px rgba(255,215,0,0.9), 0 0 16px rgba(255,215,0,0.5)';
+
+            const icon = L.divIcon({
+                html: `<div style="
+                    width:${size}px;height:${size}px;
+                    font-size:${size}px;line-height:1;
+                    color:${color};
+                    filter:drop-shadow(0 0 6px ${color});
+                    text-shadow:${glow};
+                    display:flex;align-items:center;justify-content:center;
+                    animation:starPulse 1.5s ease-in-out infinite;
+                ">★</div>`,
+                className: '',
+                iconSize: [size, size],
+                iconAnchor: [size / 2, size / 2],
+            });
+
+            marker = L.marker([lat, lng], { icon });
+        } else {
+            const { color, radius } = MagnitudeUtils.getMarkerStyle(magnitude);
+            marker = L.circleMarker([lat, lng], {
+                radius,
+                fillColor: color,
+                color: 'rgba(255,255,255,0.3)',
+                weight: 1.5,
+                opacity: 1,
+                fillOpacity: 0.85
+            });
+        }
 
         marker.bindPopup(this.createPopupContent(feature, index, highlightCallback), {
             maxWidth: 240,
