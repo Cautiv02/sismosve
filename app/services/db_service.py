@@ -12,7 +12,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path(os.getenv("DB_PATH", "data/sismos.db"))
+DB_PATH = Path(os.getenv("DB_PATH", "/tmp/sismos.db"))
 
 
 def get_conn() -> sqlite3.Connection:
