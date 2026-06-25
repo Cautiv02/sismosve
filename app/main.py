@@ -2,11 +2,12 @@
 Aplicación principal FastAPI para sismos de Venezuela - Modular
 """
 
+import traceback
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-# from jinja2 import UndefinedError
+from jinja2 import Environment, FileSystemLoader
 
 from .config import lifespan
 from .routers import sismos, admin, seo
@@ -21,15 +22,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Configurar templates
-templates = Jinja2Templates(directory="templates")
+# Configurar templates (cache_size=0 evita bug con Python 3.14)
+_jinja_env = Environment(loader=FileSystemLoader("templates"), cache_size=0)
+templates = Jinja2Templates(env=_jinja_env)
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def home(request: Request):
     """Página principal de la aplicación"""
-    context = {"request": request}
-    response = templates.TemplateResponse("index.html", context)
+    response = templates.TemplateResponse(request, "index.html")
 
     # Headers para evitar caché del HTML principal (siempre obtener la versión más reciente)
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -38,6 +39,13 @@ async def home(request: Request):
 
     return response
 
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    tb = traceback.format_exc()
+    print("=== ERROR ===")
+    print(tb)
+    return PlainTextResponse(tb, status_code=500)
 
 # Incluir routers
 app.include_router(sismos.router)
