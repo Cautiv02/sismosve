@@ -24,6 +24,13 @@ USGS_VE_URL = (
     "&minlatitude=0.6&maxlatitude=12.5&minlongitude=-73.5&maxlongitude=-59.5"
 )
 
+USGS_VE_URL_30D = (
+    "https://earthquake.usgs.gov/fdsnws/event/1/query"
+    "?format=geojson&limit=1000&orderby=time&minmagnitude=1.0"
+    "&minlatitude=0.6&maxlatitude=12.5&minlongitude=-73.5&maxlongitude=-59.5"
+    "&starttime={start}&endtime={end}"
+)
+
 
 class UpdaterService:
     def __init__(self, sismos_service: SismosService, update_interval: int = 300):
@@ -63,7 +70,7 @@ class UpdaterService:
             self.scheduler.start()
             self.is_running = True
             await self.update_sismos_data()
-            await self._fetch_and_save_usgs()
+            await self._fetch_and_save_usgs_historical()
             self.logger.info("Scheduler iniciado. Intervalo: %ds", self.update_interval)
         except Exception as e:
             self.logger.error("Error al iniciar scheduler: %s", e)
@@ -103,6 +110,53 @@ class UpdaterService:
             self.update_stats["failed_updates"] += 1
             self.update_stats["last_error"] = str(e)
             return False
+
+    async def _fetch_and_save_usgs_historical(self):
+        """Carga los ultimos 30 dias de USGS al arrancar para poblar la DB rapidamente."""
+        end = datetime.now(tz=timezone.utc)
+        start = end - timedelta(days=30)
+        url = USGS_VE_URL_30D.format(
+            start=start.strftime("%Y-%m-%d"),
+            end=end.strftime("%Y-%m-%d")
+        )
+        self.logger.info("Cargando historial USGS 30 dias...")
+        try:
+            timeout = aiohttp.ClientTimeout(total=60)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        self.logger.error("USGS historico respondio %d", resp.status)
+                        await self._fetch_and_save_usgs()
+                        return
+                    data = await resp.json()
+            nuevos = 0
+            for f in data.get("features", []):
+                props = f.get("properties", {})
+                coords = f.get("geometry", {}).get("coordinates", [0, 0, 0])
+                ts = (props.get("time") or 0) / 1000
+                try:
+                    dt = datetime.fromtimestamp(ts, tz=VET)
+                    date_str = dt.strftime("%d-%m-%Y")
+                    time_str = dt.strftime("%H:%M")
+                except Exception:
+                    continue
+                mag = props.get("mag") or 0
+                if db_service.upsert_sismo(
+                    source="USGS",
+                    magnitude=float(mag),
+                    lat=float(coords[1]),
+                    lon=float(coords[0]),
+                    depth=f"{float(coords[2]):.1f} km",
+                    place=props.get("place") or "Venezuela",
+                    date=date_str,
+                    time=time_str,
+                    country="Venezuela",
+                ):
+                    nuevos += 1
+            self.logger.info("USGS historico: %d nuevos eventos guardados", nuevos)
+        except Exception as e:
+            self.logger.error("Error USGS historico: %s", e)
+            await self._fetch_and_save_usgs()
 
     async def _fetch_and_save_usgs(self):
         self.logger.info("Actualizando USGS Venezuela...")
