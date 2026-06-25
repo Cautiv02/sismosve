@@ -42,6 +42,7 @@ export class UIManager {
         sb.textContent = message;
         sb.className = 'status-bar visible error';
         this.elements.loadBtn.disabled = false;
+        setTimeout(() => { sb.className = 'status-bar'; }, 5000);
     }
 
     updateLastUpdateTime() {
