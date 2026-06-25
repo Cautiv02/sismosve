@@ -48,6 +48,8 @@ html, body {
     justify-content: space-between;
     padding: 0 20px;
     z-index: 100;
+    flex-wrap: nowrap;
+    overflow: hidden;
 }
 
 .topbar-left {
@@ -470,6 +472,11 @@ html, body {
 
 /* LEAFLET OVERRIDES */
 .leaflet-tile-pane { filter: brightness(0.85) saturate(0.7); }
+
+.leaflet-container {
+    max-width: 100% !important;
+    overflow: hidden !important;
+}
 
 .leaflet-popup-content-wrapper {
     background: var(--bg2);
