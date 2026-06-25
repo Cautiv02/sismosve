@@ -2,6 +2,7 @@
 Servicio de base de datos SQLite para registro historico de sismos
 """
 
+import os
 import sqlite3
 import hashlib
 import logging
@@ -11,12 +12,12 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path("data/sismos.db")
+DB_PATH = Path(os.getenv("DB_PATH", "data/sismos.db"))
 
 
 def get_conn() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
