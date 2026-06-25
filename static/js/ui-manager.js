@@ -33,7 +33,6 @@ export class UIManager {
         const sb = this.elements.statusBar;
         sb.textContent = message;
         sb.className = 'status-bar visible success';
-        this.elements.exportBtn.disabled = false;
         this.elements.loadBtn.disabled = false;
         setTimeout(() => { sb.className = 'status-bar'; }, 3000);
     }
@@ -92,8 +91,11 @@ export class UIManager {
         );
 
         if (features.length === 0) {
+            const msg = data.features.length === 0
+                ? 'Recopilando datos, vuelve en unos minutos...'
+                : `Sin sismos con magnitud >= ${minMag.toFixed(1)}`;
             this.elements.earthquakeList.innerHTML =
-                `<div style="padding:24px;text-align:center;color:var(--text3);font-size:13px">Sin sismos con magnitud >= ${minMag.toFixed(1)}</div>`;
+                `<div style="padding:24px;text-align:center;color:var(--text3);font-size:13px">${msg}</div>`;
             return;
         }
 

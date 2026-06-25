@@ -66,8 +66,11 @@ export class ValidationUtils {
     static isValidEarthquakeData(data) {
         return data &&
                typeof data === 'object' &&
-               Array.isArray(data.features) &&
-               data.features.length > 0;
+               Array.isArray(data.features);
+    }
+
+    static hasEarthquakes(data) {
+        return this.isValidEarthquakeData(data) && data.features.length > 0;
     }
 
     static isValidCoordinates(lat, lng) {
