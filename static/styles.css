@@ -614,12 +614,71 @@ html, body {
 
 /* RESPONSIVE */
 @media (max-width: 768px) {
-    .app-layout { grid-template-rows: 54px 1fr; }
-    .main-content { grid-template-columns: 1fr; grid-template-rows: 55vh auto; }
-    .sidebar { border-left: none; border-top: 1px solid var(--border); overflow-y: auto; }
+    .app-layout {
+        grid-template-rows: 50px 1fr;
+        height: 100dvh;
+    }
+
+    .topbar {
+        padding: 0 12px;
+    }
+
+    .app-tagline { display: none; }
+
+    .app-name { font-size: 13px; }
+
+    .badge-live { display: none; }
+
+    .last-update { display: none; }
+
+    .btn-reload {
+        padding: 5px 10px;
+        font-size: 11px;
+    }
+
+    .main-content {
+        grid-template-columns: 1fr;
+        grid-template-rows: 45vh 1fr;
+        overflow-y: auto;
+    }
+
+    .map-wrap {
+        position: relative;
+        height: 45vh;
+        flex-shrink: 0;
+    }
+
+    .sidebar {
+        border-left: none;
+        border-top: 1px solid var(--border);
+        overflow-y: auto;
+        height: auto;
+    }
+
+    .stats-grid {
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        padding: 10px;
+    }
+
+    .stat-card { padding: 10px; }
+
+    .stat-val { font-size: 18px; }
+
+    .earthquake-list {
+        max-height: none;
+        flex: none;
+        padding-bottom: 20px;
+    }
+
     .filter-panel { display: none; }
     .map-legend { display: none; }
-    .earthquake-list { max-height: 300px; }
+
+    .status-bar {
+        bottom: auto;
+        top: 8px;
+        right: 8px;
+    }
 }
 
 @media (prefers-reduced-motion: reduce) {
