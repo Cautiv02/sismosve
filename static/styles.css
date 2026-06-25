@@ -28,6 +28,8 @@ html, body {
     color: var(--text);
     font-size: 14px;
     line-height: 1.5;
+    overflow-x: hidden;
+    max-width: 100vw;
 }
 
 .app-layout {
@@ -615,44 +617,70 @@ html, body {
 /* RESPONSIVE */
 @media (max-width: 768px) {
     .app-layout {
-        grid-template-rows: 50px 1fr;
+        grid-template-rows: 48px 1fr;
         height: 100dvh;
+        overflow: hidden;
     }
 
+    /* Topbar compacto */
     .topbar {
-        padding: 0 12px;
+        padding: 0 10px;
+        overflow: hidden;
+    }
+
+    .topbar-left { gap: 8px; min-width: 0; }
+
+    .topbar-right {
+        gap: 8px;
+        flex-shrink: 0;
+    }
+
+    .app-name {
+        font-size: 13px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 140px;
     }
 
     .app-tagline { display: none; }
-
-    .app-name { font-size: 13px; }
-
-    .badge-live { display: none; }
-
+    .badge-live  { display: none; }
     .last-update { display: none; }
 
     .btn-reload {
         padding: 5px 10px;
         font-size: 11px;
+        white-space: nowrap;
     }
 
+    /* Layout vertical */
     .main-content {
-        grid-template-columns: 1fr;
-        grid-template-rows: 45vh 1fr;
+        display: flex;
+        flex-direction: column;
         overflow-y: auto;
+        overflow-x: hidden;
+        width: 100%;
     }
 
     .map-wrap {
-        position: relative;
+        width: 100%;
         height: 45vh;
+        min-height: 45vh;
         flex-shrink: 0;
+        overflow: hidden;
+    }
+
+    #map {
+        width: 100% !important;
+        height: 100% !important;
     }
 
     .sidebar {
         border-left: none;
         border-top: 1px solid var(--border);
+        flex: 1;
         overflow-y: auto;
-        height: auto;
+        overflow-x: hidden;
     }
 
     .stats-grid {
@@ -661,23 +689,24 @@ html, body {
         padding: 10px;
     }
 
-    .stat-card { padding: 10px; }
-
-    .stat-val { font-size: 18px; }
+    .stat-card  { padding: 10px; }
+    .stat-val   { font-size: 18px; }
 
     .earthquake-list {
         max-height: none;
         flex: none;
-        padding-bottom: 20px;
+        padding-bottom: 24px;
     }
 
     .filter-panel { display: none; }
-    .map-legend { display: none; }
+    .map-legend   { display: none; }
 
     .status-bar {
         bottom: auto;
         top: 8px;
         right: 8px;
+        left: 8px;
+        text-align: center;
     }
 }
 
