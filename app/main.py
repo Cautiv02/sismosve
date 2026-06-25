@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
 from jinja2 import Environment, FileSystemLoader
 
 from .config import lifespan
@@ -15,6 +16,15 @@ from .routers import sismos, admin, seo, usgs_router, sgc_router, registro_route
 
 
 # Crear aplicaciÃ³n FastAPI
+class NoCacheMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
 app = FastAPI(
     title="SismosVE API",
     description="API para datos de sismos de Venezuela desde FUNVISIS",
@@ -74,6 +84,7 @@ app.include_router(registro_router.router)
 # app.add_exception_handler(UndefinedError, jinja_undefined_handler)
 
 # Configurar archivos estÃ¡ticos
+app.add_middleware(NoCacheMiddleware)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
