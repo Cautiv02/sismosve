@@ -50,19 +50,49 @@ def _make_id(lat: float, lon: float, date: str, time: str) -> str:
     return hashlib.md5(key.encode()).hexdigest()
 
 
+def _is_duplicate(conn, lat: float, lon: float, date: str, time: str) -> bool:
+    """Detecta duplicados entre agencias: mismo evento si está a <0.2° y <5 min."""
+    rows = conn.execute(
+        "SELECT lat, lon, time FROM sismos WHERE date = ?", (date,)
+    ).fetchall()
+    try:
+        t_new = datetime.strptime(time, "%H:%M")
+    except ValueError:
+        return False
+    for row in rows:
+        if abs(row["lat"] - lat) > 0.2 or abs(row["lon"] - lon) > 0.2:
+            continue
+        try:
+            t_existing = datetime.strptime(row["time"], "%H:%M")
+            if abs((t_new - t_existing).total_seconds()) <= 300:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def upsert_sismo(source: str, magnitude: float, lat: float, lon: float,
                  depth: str, place: str, date: str, time: str, country: str) -> bool:
     """Inserta un sismo si no existe. Retorna True si fue nuevo."""
     sid = _make_id(lat, lon, date, time)
     try:
         with get_conn() as conn:
+            # Deduplicacion exacta por hash
+            exists = conn.execute(
+                "SELECT 1 FROM sismos WHERE id = ?", (sid,)
+            ).fetchone()
+            if exists:
+                return False
+            # Deduplicacion espaciotemporal (misma fuente puede tener coords ligeramente distintas)
+            if _is_duplicate(conn, lat, lon, date, time):
+                return False
             conn.execute("""
-                INSERT OR IGNORE INTO sismos
+                INSERT INTO sismos
                     (id, source, magnitude, lat, lon, depth, place, date, time, country)
                 VALUES (?,?,?,?,?,?,?,?,?,?)
             """, (sid, source, magnitude, lat, lon, depth, place, date, time, country))
             conn.commit()
-            return conn.execute("SELECT changes()").fetchone()[0] > 0
+            return True
     except Exception as e:
         logger.error("Error upsert sismo: %s", e)
         return False
