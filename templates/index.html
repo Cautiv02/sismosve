@@ -50,6 +50,16 @@
                     <button class="pill active" data-period="24h">24h</button>
                     <button class="pill" data-period="7d">7d</button>
                 </div>
+                <div class="filter-section-label">Mapa</div>
+                <div class="time-pills">
+                    <button class="pill" id="layerDark">Oscuro</button>
+                    <button class="pill active" id="layerSat">Sat&#233;lite</button>
+                    <button class="pill" id="layerTerrain">Relieve</button>
+                </div>
+                <div class="time-pills" style="margin-top:4px;">
+                    <button class="pill active" id="layerTectonic">Placas</button>
+                    <button class="pill active" id="layerFaults">Fallas</button>
+                </div>
             </div>
 
             <div class="map-legend">
@@ -110,7 +120,7 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script>window.API_ENDPOINT = '/api/registro';</script>
-<script type="module" src="/static/js/main.js?v=4"></script>
+<script type="module" src="/static/js/main.js?v=5"></script>
 
 </body>
 </html>

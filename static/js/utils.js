@@ -21,6 +21,28 @@
         }
     }
 
+    static getRelativeTime(date, time) {
+        try {
+            const eventDt = this.parseDateTime(date, time);
+            // Corregir diferencia entre timezone del browser y VET (UTC-4)
+            const VET_OFFSET_MIN = 240; // VET = UTC-4 → getTimezoneOffset() = 240
+            const correctionMs = (VET_OFFSET_MIN - new Date().getTimezoneOffset()) * 60000;
+            const eventEpoch = eventDt.getTime() + correctionMs;
+            const diffMs = Date.now() - eventEpoch;
+            if (diffMs < 0) return 'ahora';
+            const mins = Math.floor(diffMs / 60000);
+            if (mins < 1)  return 'hace <1 min';
+            if (mins < 60) return `hace ${mins} min`;
+            const hrs = Math.floor(mins / 60);
+            const remMin = mins % 60;
+            if (hrs < 24)  return remMin > 0 ? `hace ${hrs}h ${remMin}min` : `hace ${hrs}h`;
+            const days = Math.floor(hrs / 24);
+            return `hace ${days}d`;
+        } catch {
+            return '';
+        }
+    }
+
     static getLatestEarthquake(features) {
         return features.reduce((latest, current) => {
             if (!latest) return current;

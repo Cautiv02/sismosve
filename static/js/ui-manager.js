@@ -115,11 +115,13 @@ export class UIManager {
             const depth = feature.properties.depth || '-';
             const time = DateTimeUtils.convertTo12Hour(feature.properties.time);
 
+            const rel = DateTimeUtils.getRelativeTime(feature.properties.date, feature.properties.time);
             return `<div class="earthquake-item" role="listitem" data-idx="${i}" data-lat="${feature.properties.lat}" data-lng="${feature.properties.long}">
                 <div class="eq-mag-badge ${cls}">${mag.toFixed(1)}</div>
                 <div class="eq-info">
                     <div class="eq-loc">${loc}</div>
                     <div class="eq-meta">${feature.properties.date} - ${time}</div>
+                    ${rel ? `<div class="eq-rel-time">${rel}</div>` : ''}
                 </div>
                 <div class="eq-depth">${depth}<span>prof.</span></div>
             </div>`;
@@ -171,9 +173,9 @@ export class UIManager {
                 if (callbacks.onSortChange) callbacks.onSortChange(this.sortByMag);
             });
         }
-        document.querySelectorAll('.pill').forEach(pill => {
+        document.querySelectorAll('.pill[data-period]').forEach(pill => {
             pill.addEventListener('click', () => {
-                document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+                document.querySelectorAll('.pill[data-period]').forEach(p => p.classList.remove('active'));
                 pill.classList.add('active');
                 if (callbacks.onPeriodChange) callbacks.onPeriodChange(pill.dataset.period);
             });

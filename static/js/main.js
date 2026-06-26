@@ -20,8 +20,32 @@ export class SismosApp {
 
     init() {
         this.bindEvents();
+        this.bindMapControls();
         this.loadData();
         window.mapHighlightCallback = (index) => this.uiManager.highlightEarthquake(index);
+    }
+
+    bindMapControls() {
+        const baseBtns = { layerDark: 'dark', layerSat: 'sat', layerTerrain: 'terrain' };
+        Object.entries(baseBtns).forEach(([id, name]) => {
+            const btn = document.getElementById(id);
+            if (!btn) return;
+            btn.addEventListener('click', () => {
+                this.mapManager.setBaseLayer(name);
+                Object.keys(baseBtns).forEach(k => document.getElementById(k)?.classList.remove('active'));
+                btn.classList.add('active');
+            });
+        });
+
+        ['layerTectonic', 'layerFaults'].forEach(id => {
+            const btn = document.getElementById(id);
+            if (!btn) return;
+            const overlay = id === 'layerTectonic' ? 'tectonic' : 'faults';
+            btn.addEventListener('click', () => {
+                const on = this.mapManager.toggleOverlay(overlay);
+                btn.classList.toggle('active', on);
+            });
+        });
     }
 
     bindEvents() {

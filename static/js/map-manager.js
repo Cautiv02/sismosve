@@ -11,12 +11,71 @@ export class MapManager {
 
     init() {
         try {
-            const center = window.MAP_CENTER || [8.0, -66.0]; const zoom = window.MAP_ZOOM || 6; this.map = L.map('map').setView(center, zoom);
+            const center = window.MAP_CENTER || [8.0, -66.0];
+            const zoom   = window.MAP_ZOOM   || 6;
+            this.map = L.map('map').setView(center, zoom);
 
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap contributors',
-                maxZoom: 18,
-            }).addTo(this.map);
+            // --- Capas base ---
+            const darkLayer = L.tileLayer(
+                'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                { attribution: '&copy; CartoDB', maxZoom: 19 }
+            );
+            const satelliteLayer = L.tileLayer(
+                'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                { attribution: '&copy; ESRI', maxZoom: 19 }
+            );
+            const terrainLayer = L.tileLayer(
+                'https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}',
+                { attribution: '&copy; ESRI', maxZoom: 13 }
+            );
+
+            satelliteLayer.addTo(this.map);
+
+            // --- Overlay: placas tectónicas ---
+            this.tectonicLayer = L.layerGroup();
+            fetch('https://raw.githubusercontent.com/fraxen/tectonicplates/master/GeoJSON/PB2002_boundaries.json')
+                .then(r => r.json())
+                .then(data => {
+                    L.geoJSON(data, {
+                        style: { color: '#FF6B35', weight: 2, opacity: 0.75, dashArray: '4 3' }
+                    }).addTo(this.tectonicLayer);
+                })
+                .catch(() => {});
+
+            // --- Overlay: fallas principales Venezuela ---
+            this.faultsLayer = L.layerGroup();
+            const faults = {
+                type: 'FeatureCollection',
+                features: [
+                    { type: 'Feature', properties: { name: 'Falla de Boconó' },
+                      geometry: { type: 'LineString', coordinates: [[-72.6,7.9],[-71.5,8.5],[-70.5,9.2],[-69.5,9.8],[-68.5,10.3],[-67.8,10.6]] } },
+                    { type: 'Feature', properties: { name: 'Falla de El Pilar' },
+                      geometry: { type: 'LineString', coordinates: [[-65.2,10.7],[-64.5,10.6],[-63.5,10.5],[-62.5,10.4],[-61.8,10.3]] } },
+                    { type: 'Feature', properties: { name: 'Falla de Oca-Ancón' },
+                      geometry: { type: 'LineString', coordinates: [[-73.1,11.2],[-72.0,11.4],[-71.0,11.5],[-70.2,11.6]] } },
+                ],
+            };
+            L.geoJSON(faults, {
+                style: { color: '#facc15', weight: 2, opacity: 0.8, dashArray: '6 3' },
+                onEachFeature: (f, layer) => layer.bindTooltip(f.properties.name, { sticky: true }),
+            }).addTo(this.faultsLayer);
+
+            // Capa de referencia: fronteras + etiquetas (transparente, va sobre satélite)
+            this.labelsLayer = L.tileLayer(
+                'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+                { attribution: '&copy; ESRI', maxZoom: 19, opacity: 0.9 }
+            );
+
+            // Etiquetas + fronteras activas por defecto (sobre satélite)
+            this.labelsLayer.addTo(this.map);
+
+            // Placas y fallas activas por defecto
+            this.tectonicLayer.addTo(this.map);
+            this.faultsLayer.addTo(this.map);
+
+            // Guardar referencias para switching externo
+            this.baseLayers = { dark: darkLayer, sat: satelliteLayer, terrain: terrainLayer };
+            this.currentBase = satelliteLayer;
 
             this.markersGroup = L.layerGroup().addTo(this.map);
             L.control.scale({ imperial: false }).addTo(this.map);
@@ -179,6 +238,39 @@ export class MapManager {
     invalidateSize() {
         if (this.isReady()) {
             setTimeout(() => this.map.invalidateSize(), 100);
+        }
+    }
+
+    setBaseLayer(name) {
+        if (!this.isReady()) return;
+        const layer = this.baseLayers[name];
+        if (!layer || layer === this.currentBase) return;
+        this.map.removeLayer(this.currentBase);
+        layer.addTo(this.map);
+        layer.bringToBack();
+        this.currentBase = layer;
+        // Filtro de brillo solo en capa oscura
+        const pane = this.map.getPanes().tilePane;
+        if (pane) pane.style.filter = name === 'dark' ? 'brightness(0.85) saturate(0.7)' : 'none';
+        // Etiquetas/fronteras solo sobre satélite y relieve
+        if (name === 'dark') {
+            if (this.map.hasLayer(this.labelsLayer)) this.map.removeLayer(this.labelsLayer);
+        } else {
+            if (!this.map.hasLayer(this.labelsLayer)) this.labelsLayer.addTo(this.map);
+        }
+        this.markersGroup.bringToFront();
+    }
+
+    toggleOverlay(name) {
+        if (!this.isReady()) return;
+        const layer = name === 'tectonic' ? this.tectonicLayer : this.faultsLayer;
+        if (!layer) return;
+        if (this.map.hasLayer(layer)) {
+            this.map.removeLayer(layer);
+            return false;
+        } else {
+            layer.addTo(this.map);
+            return true;
         }
     }
 
