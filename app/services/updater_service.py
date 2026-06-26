@@ -31,6 +31,19 @@ USGS_VE_URL_30D = (
     "&starttime={start}&endtime={end}"
 )
 
+EMSC_VE_URL = (
+    "https://www.seismicportal.eu/fdsnws/event/1/query"
+    "?format=json&limit=500&orderby=time&minmagnitude=1.0"
+    "&minlatitude=0.6&maxlatitude=12.5&minlongitude=-73.5&maxlongitude=-59.5"
+)
+
+EMSC_VE_URL_30D = (
+    "https://www.seismicportal.eu/fdsnws/event/1/query"
+    "?format=json&limit=1000&orderby=time&minmagnitude=1.0"
+    "&minlatitude=0.6&maxlatitude=12.5&minlongitude=-73.5&maxlongitude=-59.5"
+    "&starttime={start}&endtime={end}"
+)
+
 
 class UpdaterService:
     def __init__(self, sismos_service: SismosService, update_interval: int = 300):
@@ -67,10 +80,17 @@ class UpdaterService:
                 id="update_usgs",
                 replace_existing=True,
             )
+            self.scheduler.add_job(
+                self._fetch_and_save_emsc,
+                IntervalTrigger(seconds=self.update_interval),
+                id="update_emsc",
+                replace_existing=True,
+            )
             self.scheduler.start()
             self.is_running = True
             await self.update_sismos_data()
             await self._fetch_and_save_usgs_historical()
+            await self._fetch_and_save_emsc_historical()
             self.logger.info("Scheduler iniciado. Intervalo: %ds", self.update_interval)
         except Exception as e:
             self.logger.error("Error al iniciar scheduler: %s", e)
@@ -197,6 +217,76 @@ class UpdaterService:
             self.logger.info("USGS: %d nuevos eventos guardados", nuevos)
         except Exception as e:
             self.logger.error("Error USGS fetch: %s", e)
+
+    def _parse_emsc_features(self, features: list, source: str) -> int:
+        nuevos = 0
+        for f in features:
+            props = f.get("properties", {})
+            coords = f.get("geometry", {}).get("coordinates", [0, 0, 0])
+            # EMSC usa segundos en 'time', no milisegundos
+            raw_time = props.get("time") or props.get("lastupdate") or ""
+            try:
+                if isinstance(raw_time, (int, float)):
+                    dt = datetime.fromtimestamp(float(raw_time), tz=VET)
+                else:
+                    dt = datetime.fromisoformat(raw_time.replace("Z", "+00:00")).astimezone(VET)
+                date_str = dt.strftime("%d-%m-%Y")
+                time_str = dt.strftime("%H:%M")
+            except Exception:
+                continue
+            mag = props.get("mag") or props.get("magnitude") or 0
+            depth = coords[2] if len(coords) > 2 else 0
+            place = props.get("place") or props.get("flynn_region") or "Venezuela"
+            if db_service.upsert_sismo(
+                source=source,
+                magnitude=float(mag),
+                lat=float(coords[1]),
+                lon=float(coords[0]),
+                depth=f"{float(depth):.1f} km",
+                place=place,
+                date=date_str,
+                time=time_str,
+                country="Venezuela",
+            ):
+                nuevos += 1
+        return nuevos
+
+    async def _fetch_and_save_emsc_historical(self):
+        """Carga los ultimos 30 dias de EMSC al arrancar."""
+        end = datetime.now(tz=timezone.utc)
+        start = end - timedelta(days=30)
+        url = EMSC_VE_URL_30D.format(
+            start=start.strftime("%Y-%m-%dT%H:%M:%S"),
+            end=end.strftime("%Y-%m-%dT%H:%M:%S"),
+        )
+        self.logger.info("Cargando historial EMSC 30 dias...")
+        try:
+            timeout = aiohttp.ClientTimeout(total=60)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        self.logger.error("EMSC historico respondio %d", resp.status)
+                        return
+                    data = await resp.json(content_type=None)
+            nuevos = self._parse_emsc_features(data.get("features", []), "EMSC")
+            self.logger.info("EMSC historico: %d nuevos eventos guardados", nuevos)
+        except Exception as e:
+            self.logger.error("Error EMSC historico: %s", e)
+
+    async def _fetch_and_save_emsc(self):
+        self.logger.info("Actualizando EMSC Venezuela...")
+        try:
+            timeout = aiohttp.ClientTimeout(total=20)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(EMSC_VE_URL) as resp:
+                    if resp.status != 200:
+                        self.logger.error("EMSC respondio %d", resp.status)
+                        return
+                    data = await resp.json(content_type=None)
+            nuevos = self._parse_emsc_features(data.get("features", []), "EMSC")
+            self.logger.info("EMSC: %d nuevos eventos guardados", nuevos)
+        except Exception as e:
+            self.logger.error("Error EMSC fetch: %s", e)
 
     def _save_collection_to_db(self, sismos: SismosCollection, source: str):
         nuevos = 0
