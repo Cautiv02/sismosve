@@ -5,6 +5,7 @@ export class MapManager {
         this.map = null;
         this.markersGroup = null;
         this.initialized = false;
+        this.markerIndex = [];
         this.init();
     }
 
@@ -34,6 +35,7 @@ export class MapManager {
         if (!this.isReady() || !ValidationUtils.isValidEarthquakeData(data)) return;
 
         this.markersGroup.clearLayers();
+        this.markerIndex = [];
 
         const features = data.features;
         const bounds = [];
@@ -47,6 +49,7 @@ export class MapManager {
             bounds.push([lat, lng]);
             const marker = this.createMarker(feature, index, highlightCallback);
             this.markersGroup.addLayer(marker);
+            this.markerIndex.push({ marker, lat, lng, feature });
         });
 
         if (bounds.length > 0) {
@@ -132,6 +135,30 @@ export class MapManager {
     centerOn(lat, lng, zoom = 9) {
         if (!this.isReady() || isNaN(lat) || isNaN(lng)) return;
         this.map.setView([lat, lng], zoom, { animate: true });
+    }
+
+    openPopupAt(lat, lng) {
+        if (!this.isReady()) return;
+
+        const entry = this.markerIndex.find(m =>
+            Math.abs(m.lat - lat) < 0.001 && Math.abs(m.lng - lng) < 0.001
+        );
+        if (!entry) { this.centerOn(lat, lng); return; }
+
+        // Reset highlight on all circle markers
+        this.markerIndex.forEach(({ marker }) => {
+            if (marker.setStyle) {
+                marker.setStyle({ weight: 1.5, color: 'rgba(255,255,255,0.3)', opacity: 1 });
+            }
+        });
+
+        // Highlight selected marker
+        if (entry.marker.setStyle) {
+            entry.marker.setStyle({ weight: 3, color: '#ffffff', opacity: 1 });
+        }
+
+        this.map.setView([lat, lng], 9, { animate: true });
+        setTimeout(() => entry.marker.openPopup(), 300);
     }
 
     centerOnEarthquake(feature, zoomLevel = 9) {

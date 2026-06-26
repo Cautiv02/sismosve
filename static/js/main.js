@@ -31,7 +31,7 @@ export class SismosApp {
             onFilterChange: ({ minMag }) => { this.minMag = minMag; this.refreshDisplay(); },
             onSortChange:  (sortByMag) => { this.sortByMag = sortByMag; this.refreshDisplay(); },
             onPeriodChange: (period) => { this.period = period; this.refreshDisplay(); },
-            onItemClick:   (lat, lng) => this.mapManager.centerOn(lat, lng),
+            onItemClick:   (lat, lng) => this.mapManager.openPopupAt(lat, lng),
         });
     }
 

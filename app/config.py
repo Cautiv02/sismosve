@@ -36,10 +36,10 @@ def setup_logging():
         # Agregar file handler si es posible
         file_handler = logging.FileHandler(log_file)
         handlers.append(file_handler)
-        print(f"📝 Logging configurado: {log_file}")
+        print(f"Logging configurado: {log_file}")
     except (PermissionError, OSError) as e:
-        print(f"⚠️  No se pudo configurar file logging: {e}")
-        print("📝 Usando solo console logging")
+        print(f"No se pudo configurar file logging: {e}")
+        print("Usando solo console logging")
     
     logging.basicConfig(
         level=logging.INFO,
