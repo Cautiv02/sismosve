@@ -45,10 +45,12 @@ export class SismosApp {
             const now = new Date();
             const ms = this.period === '24h' ? 86400000 : 604800000;
             const cutoff = new Date(now - ms);
+            // Réplicas: M>=4.0 ocurridas después del evento principal del 24-06-2026 18:04
+            const aftershockCutoff = new Date(2026, 5, 24, 18, 4);
             features = features.filter(f => {
                 const dt  = DateTimeUtils.parseDateTime(f.properties.date, f.properties.time);
                 const mag = parseFloat(f.properties.value) || 0;
-                return dt >= cutoff || mag >= 4.0;
+                return dt >= cutoff || (mag >= 4.0 && dt >= aftershockCutoff);
             });
         }
 
@@ -56,8 +58,8 @@ export class SismosApp {
     }
 
     _getPeriodLabel() {
-        if (this.period === '24h') return 'últimas 24h + M4+';
-        if (this.period === '7d')  return 'últimos 7 días + M4+';
+        if (this.period === '24h') return 'últimas 24h + réplicas M4+';
+        if (this.period === '7d')  return 'últimos 7 días + réplicas M4+';
         return 'todos los eventos';
     }
 
