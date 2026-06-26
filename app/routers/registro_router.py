@@ -1,7 +1,8 @@
 ﻿"""
 Endpoint para el registro historico propio de sismos
 """
-from fastapi import APIRouter, Query
+import os
+from fastapi import APIRouter, Query, HTTPException
 from ..services import db_service
 
 router = APIRouter(prefix="/api", tags=["Registro"])
@@ -23,6 +24,35 @@ def _to_feature(row: dict) -> dict:
             "source":           row["source"],
         },
     }
+
+
+@router.post("/registro/import")
+async def import_registro(payload: dict, key: str = Query(...)):
+    """Importa eventos al registro. Requiere clave secreta."""
+    secret = os.getenv("IMPORT_KEY", "")
+    if not secret or key != secret:
+        raise HTTPException(status_code=403, detail="Clave invalida")
+    features = payload.get("features", [])
+    nuevos = 0
+    for f in features:
+        p = f.get("properties", {})
+        coords = f.get("geometry", {}).get("coordinates", [0, 0, 0])
+        try:
+            if db_service.upsert_sismo(
+                source=p.get("source", "LOCAL"),
+                magnitude=float(p.get("value", 0)),
+                lat=float(p.get("lat", coords[1])),
+                lon=float(p.get("long", coords[0])),
+                depth=p.get("depth", "0 km"),
+                place=p.get("addressFormatted", ""),
+                date=p.get("date", ""),
+                time=p.get("time", ""),
+                country=p.get("country", "Venezuela"),
+            ):
+                nuevos += 1
+        except Exception:
+            continue
+    return {"imported": nuevos, "total": db_service.get_total()}
 
 
 @router.get("/registro")
