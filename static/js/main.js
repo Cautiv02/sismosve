@@ -12,7 +12,7 @@ export class SismosApp {
 
         this.isLoading = false;
         this.minMag = 0;
-        this.period = 'all';
+        this.period = '24h';
         this.sortByMag = false;
 
         this.init();
@@ -30,7 +30,7 @@ export class SismosApp {
             onExportData:  () => this.exportData(),
             onFilterChange: ({ minMag }) => { this.minMag = minMag; this.refreshDisplay(); },
             onSortChange:  (sortByMag) => { this.sortByMag = sortByMag; this.refreshDisplay(); },
-            onPeriodChange: (period) => { this.period = period; this.refreshDisplay(); },
+            onPeriodChange: (period) => { this.period = period; this._updatePeriodLabel(); this.refreshDisplay(); },
             onItemClick:   (lat, lng) => this.mapManager.openPopupAt(lat, lng),
         });
     }
@@ -46,12 +46,24 @@ export class SismosApp {
             const ms = this.period === '24h' ? 86400000 : 604800000;
             const cutoff = new Date(now - ms);
             features = features.filter(f => {
-                const dt = DateTimeUtils.parseDateTime(f.properties.date, f.properties.time);
-                return dt >= cutoff;
+                const dt  = DateTimeUtils.parseDateTime(f.properties.date, f.properties.time);
+                const mag = parseFloat(f.properties.value) || 0;
+                return dt >= cutoff || mag >= 4.0;
             });
         }
 
         return { ...data, features };
+    }
+
+    _getPeriodLabel() {
+        if (this.period === '24h') return 'últimas 24h + M4+';
+        if (this.period === '7d')  return 'últimos 7 días + M4+';
+        return 'todos los eventos';
+    }
+
+    _updatePeriodLabel() {
+        const el = document.getElementById('totalPeriodLabel');
+        if (el) el.textContent = this._getPeriodLabel();
     }
 
     refreshDisplay() {
@@ -93,6 +105,7 @@ export class SismosApp {
     updateUI() {
         const data = this.getFilteredData();
         if (!data?.features) return;
+        this._updatePeriodLabel();
         this.uiManager.updateStats(data);
         this.uiManager.renderEarthquakes(data, this.minMag, this.sortByMag);
         this.mapManager.updateMap(data, (index) => this.uiManager.highlightEarthquake(index));
