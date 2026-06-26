@@ -50,8 +50,13 @@ def _make_id(lat: float, lon: float, date: str, time: str) -> str:
     return hashlib.md5(key.encode()).hexdigest()
 
 
-def _is_duplicate(conn, lat: float, lon: float, date: str, time: str) -> bool:
-    """Detecta duplicados entre agencias: mismo evento si está a <0.2° y <5 min."""
+def _is_duplicate(conn, lat: float, lon: float, date: str, time: str,
+                   magnitude: float = 0.0) -> bool:
+    """Detecta duplicados entre agencias.
+    Para M5+ usa ventana amplia (1.5° / 15 min) porque FUNVISIS puede reportar
+    el epicentro en el centroide del estado, lejos de la ubicacion USGS/EMSC."""
+    deg_tol = 1.5 if magnitude >= 5.0 else 0.2
+    sec_tol = 900 if magnitude >= 5.0 else 300
     rows = conn.execute(
         "SELECT lat, lon, time FROM sismos WHERE date = ?", (date,)
     ).fetchall()
@@ -60,11 +65,11 @@ def _is_duplicate(conn, lat: float, lon: float, date: str, time: str) -> bool:
     except ValueError:
         return False
     for row in rows:
-        if abs(row["lat"] - lat) > 0.2 or abs(row["lon"] - lon) > 0.2:
+        if abs(row["lat"] - lat) > deg_tol or abs(row["lon"] - lon) > deg_tol:
             continue
         try:
             t_existing = datetime.strptime(row["time"], "%H:%M")
-            if abs((t_new - t_existing).total_seconds()) <= 300:
+            if abs((t_new - t_existing).total_seconds()) <= sec_tol:
                 return True
         except ValueError:
             continue
@@ -84,7 +89,7 @@ def upsert_sismo(source: str, magnitude: float, lat: float, lon: float,
             if exists:
                 return False
             # Deduplicacion espaciotemporal (misma fuente puede tener coords ligeramente distintas)
-            if _is_duplicate(conn, lat, lon, date, time):
+            if _is_duplicate(conn, lat, lon, date, time, magnitude):
                 return False
             conn.execute("""
                 INSERT INTO sismos
@@ -111,3 +116,46 @@ def get_sismos(limit: int = 500, offset: int = 0) -> list[dict]:
 def get_total() -> int:
     with get_conn() as conn:
         return conn.execute("SELECT COUNT(*) FROM sismos").fetchone()[0]
+
+
+def dedup_existing() -> int:
+    """Elimina duplicados ya guardados usando ventana espaciotemporal. Retorna cuantos se borraron."""
+    eliminados = 0
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, lat, lon, date, time, magnitude FROM sismos ORDER BY first_seen ASC"
+        ).fetchall()
+        seen: list[dict] = []
+        to_delete: list[str] = []
+        for row in rows:
+            mag = row["magnitude"] or 0.0
+            deg_tol = 1.5 if mag >= 5.0 else 0.2
+            sec_tol = 900 if mag >= 5.0 else 300
+            is_dup = False
+            try:
+                t_new = datetime.strptime(row["time"], "%H:%M")
+            except ValueError:
+                seen.append(dict(row))
+                continue
+            for s in seen:
+                if abs(s["lat"] - row["lat"]) > deg_tol or abs(s["lon"] - row["lon"]) > deg_tol:
+                    continue
+                if s["date"] != row["date"]:
+                    continue
+                try:
+                    t_ex = datetime.strptime(s["time"], "%H:%M")
+                    if abs((t_new - t_ex).total_seconds()) <= sec_tol:
+                        is_dup = True
+                        break
+                except ValueError:
+                    continue
+            if is_dup:
+                to_delete.append(row["id"])
+            else:
+                seen.append(dict(row))
+        for sid in to_delete:
+            conn.execute("DELETE FROM sismos WHERE id = ?", (sid,))
+            eliminados += 1
+        conn.commit()
+    logger.info("dedup_existing: %d duplicados eliminados", eliminados)
+    return eliminados
