@@ -81,7 +81,9 @@ def _make_id(lat: float, lon: float, date: str, time: str) -> str:
 
 
 def _is_duplicate(cur, lat: float, lon: float, date: str, time: str, magnitude: float = 0.0) -> bool:
-    """Detecta duplicados entre agencias. Nunca fusiona eventos con magnitudes muy distintas."""
+    """Detecta duplicados entre agencias. M7+ nunca se deduplica — son eventos raros y siempre distintos."""
+    if magnitude >= 7.0:
+        return False
     deg_tol = 1.5 if magnitude >= 5.0 else 0.2
     sec_tol = 900 if magnitude >= 5.0 else 300
     mag_tol = 0.5  # diferencia maxima para considerar mismo evento
@@ -179,6 +181,9 @@ def dedup_existing() -> int:
         to_delete: list[str] = []
         for row in rows:
             mag = row.get("magnitude") or 0.0
+            if mag >= 7.0:
+                seen.append(row)
+                continue
             deg_tol = 1.5 if mag >= 5.0 else 0.2
             sec_tol = 900 if mag >= 5.0 else 300
             is_dup = False
