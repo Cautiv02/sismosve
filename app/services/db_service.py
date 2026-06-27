@@ -81,9 +81,11 @@ def _make_id(lat: float, lon: float, date: str, time: str) -> str:
 
 
 def _is_duplicate(cur, lat: float, lon: float, date: str, time: str, magnitude: float = 0.0) -> bool:
+    """Detecta duplicados entre agencias. Nunca fusiona eventos con magnitudes muy distintas."""
     deg_tol = 1.5 if magnitude >= 5.0 else 0.2
     sec_tol = 900 if magnitude >= 5.0 else 300
-    cur.execute(f"SELECT lat, lon, time FROM sismos WHERE date = {PH}", (date,))
+    mag_tol = 0.5  # diferencia maxima para considerar mismo evento
+    cur.execute(f"SELECT lat, lon, time, magnitude FROM sismos WHERE date = {PH}", (date,))
     rows = cur.fetchall()
     try:
         t_new = datetime.strptime(time, "%H:%M")
@@ -91,6 +93,9 @@ def _is_duplicate(cur, lat: float, lon: float, date: str, time: str, magnitude: 
         return False
     for row in rows:
         r = dict(row)
+        # Si las magnitudes difieren mas de 0.5, son eventos distintos
+        if abs((r.get("magnitude") or 0) - magnitude) > mag_tol:
+            continue
         if abs(r["lat"] - lat) > deg_tol or abs(r["lon"] - lon) > deg_tol:
             continue
         try:
@@ -184,6 +189,8 @@ def dedup_existing() -> int:
                 continue
             for s in seen:
                 if s["date"] != row["date"]:
+                    continue
+                if abs((s.get("magnitude") or 0) - mag) > 0.5:
                     continue
                 if abs(s["lat"] - row["lat"]) > deg_tol or abs(s["lon"] - row["lon"]) > deg_tol:
                     continue
