@@ -169,6 +169,28 @@ def get_total() -> int:
         conn.close()
 
 
+def delete_by_place(place_pattern: str) -> int:
+    """Elimina eventos cuyo campo place contenga el patron dado (case-insensitive)."""
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        if USE_PG:
+            cur.execute("DELETE FROM sismos WHERE UPPER(place) LIKE UPPER(%s)", (f"%{place_pattern}%",))
+        else:
+            cur.execute("DELETE FROM sismos WHERE UPPER(place) LIKE UPPER(?)", (f"%{place_pattern}%",))
+        conn.commit()
+        return cur.rowcount or 0
+    except Exception as e:
+        logger.error("Error delete_by_place: %s", e)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return 0
+    finally:
+        conn.close()
+
+
 def dedup_existing() -> int:
     """Elimina duplicados ya guardados. Retorna cuántos se borraron."""
     eliminados = 0

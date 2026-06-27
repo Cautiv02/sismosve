@@ -55,6 +55,16 @@ async def import_registro(payload: dict, key: str = Query(...)):
     return {"imported": nuevos, "total": db_service.get_total()}
 
 
+@router.delete("/registro/delete")
+async def delete_by_place(place: str = Query(...), key: str = Query(...)):
+    """Elimina eventos cuyo lugar contenga el texto dado. Requiere clave secreta."""
+    secret = os.getenv("IMPORT_KEY", "")
+    if not secret or key != secret:
+        raise HTTPException(status_code=403, detail="Clave invalida")
+    eliminados = db_service.delete_by_place(place)
+    return {"eliminados": eliminados, "total": db_service.get_total()}
+
+
 @router.post("/registro/dedup")
 async def dedup_registro(key: str = Query(...)):
     """Elimina duplicados existentes en la DB usando ventana espaciotemporal."""
