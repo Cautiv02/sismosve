@@ -1,48 +1,78 @@
-﻿"""
-Servicio de base de datos SQLite para registro historico de sismos
+"""
+Servicio de base de datos - SQLite (local) o PostgreSQL (production via DATABASE_URL)
 """
 
 import os
-import sqlite3
 import hashlib
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path(os.getenv("DB_PATH", "data/sismos.db"))
+_DATABASE_URL = os.getenv("DATABASE_URL", "")
+_DB_PATH = Path(os.getenv("DB_PATH", "data/sismos.db"))
+USE_PG = bool(_DATABASE_URL)
+PH = "%s" if USE_PG else "?"
 
 
-def get_conn() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+def _get_conn():
+    if USE_PG:
+        import psycopg2
+        import psycopg2.extras
+        conn = psycopg2.connect(_DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        conn.autocommit = False
+        return conn
+    else:
+        import sqlite3
+        _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
 
 
 def init_db():
-    with get_conn() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS sismos (
-                id          TEXT PRIMARY KEY,
-                source      TEXT NOT NULL,
-                magnitude   REAL,
-                lat         REAL,
-                lon         REAL,
-                depth       TEXT,
-                place       TEXT,
-                date        TEXT,
-                time        TEXT,
-                country     TEXT,
-                first_seen  TEXT DEFAULT (datetime('now'))
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_date ON sismos(date, time)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_mag  ON sismos(magnitude)")
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        if USE_PG:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS sismos (
+                    id         TEXT PRIMARY KEY,
+                    source     TEXT NOT NULL,
+                    magnitude  REAL,
+                    lat        REAL,
+                    lon        REAL,
+                    depth      TEXT,
+                    place      TEXT,
+                    date       TEXT,
+                    time       TEXT,
+                    country    TEXT,
+                    first_seen TEXT DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+                )
+            """)
+        else:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS sismos (
+                    id         TEXT PRIMARY KEY,
+                    source     TEXT NOT NULL,
+                    magnitude  REAL,
+                    lat        REAL,
+                    lon        REAL,
+                    depth      TEXT,
+                    place      TEXT,
+                    date       TEXT,
+                    time       TEXT,
+                    country    TEXT,
+                    first_seen TEXT DEFAULT (datetime('now'))
+                )
+            """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_date ON sismos(date, time)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_mag  ON sismos(magnitude)")
         conn.commit()
-    logger.info("DB inicializada en %s", DB_PATH)
+    finally:
+        conn.close()
+    logger.info("DB (%s) inicializada", "PostgreSQL" if USE_PG else f"SQLite @ {_DB_PATH}")
 
 
 def _make_id(lat: float, lon: float, date: str, time: str) -> str:
@@ -50,26 +80,21 @@ def _make_id(lat: float, lon: float, date: str, time: str) -> str:
     return hashlib.md5(key.encode()).hexdigest()
 
 
-def _is_duplicate(conn, lat: float, lon: float, date: str, time: str,
-                   magnitude: float = 0.0) -> bool:
-    """Detecta duplicados entre agencias.
-    Para M5+ usa ventana amplia (1.5° / 15 min) porque FUNVISIS puede reportar
-    el epicentro en el centroide del estado, lejos de la ubicacion USGS/EMSC."""
+def _is_duplicate(cur, lat: float, lon: float, date: str, time: str, magnitude: float = 0.0) -> bool:
     deg_tol = 1.5 if magnitude >= 5.0 else 0.2
     sec_tol = 900 if magnitude >= 5.0 else 300
-    rows = conn.execute(
-        "SELECT lat, lon, time FROM sismos WHERE date = ?", (date,)
-    ).fetchall()
+    cur.execute(f"SELECT lat, lon, time FROM sismos WHERE date = {PH}", (date,))
+    rows = cur.fetchall()
     try:
         t_new = datetime.strptime(time, "%H:%M")
     except ValueError:
         return False
     for row in rows:
-        if abs(row["lat"] - lat) > deg_tol or abs(row["lon"] - lon) > deg_tol:
+        r = dict(row)
+        if abs(r["lat"] - lat) > deg_tol or abs(r["lon"] - lon) > deg_tol:
             continue
         try:
-            t_existing = datetime.strptime(row["time"], "%H:%M")
-            if abs((t_new - t_existing).total_seconds()) <= sec_tol:
+            if abs((t_new - datetime.strptime(r["time"], "%H:%M")).total_seconds()) <= sec_tol:
                 return True
         except ValueError:
             continue
@@ -80,71 +105,90 @@ def upsert_sismo(source: str, magnitude: float, lat: float, lon: float,
                  depth: str, place: str, date: str, time: str, country: str) -> bool:
     """Inserta un sismo si no existe. Retorna True si fue nuevo."""
     sid = _make_id(lat, lon, date, time)
+    conn = _get_conn()
     try:
-        with get_conn() as conn:
-            # Deduplicacion exacta por hash
-            exists = conn.execute(
-                "SELECT 1 FROM sismos WHERE id = ?", (sid,)
-            ).fetchone()
-            if exists:
-                return False
-            # Deduplicacion espaciotemporal (misma fuente puede tener coords ligeramente distintas)
-            if _is_duplicate(conn, lat, lon, date, time, magnitude):
-                return False
-            conn.execute("""
-                INSERT INTO sismos
-                    (id, source, magnitude, lat, lon, depth, place, date, time, country)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
+        cur = conn.cursor()
+        cur.execute(f"SELECT 1 FROM sismos WHERE id = {PH}", (sid,))
+        if cur.fetchone():
+            return False
+        if _is_duplicate(cur, lat, lon, date, time, magnitude):
+            return False
+        if USE_PG:
+            cur.execute(f"""
+                INSERT INTO sismos (id, source, magnitude, lat, lon, depth, place, date, time, country)
+                VALUES ({PH},{PH},{PH},{PH},{PH},{PH},{PH},{PH},{PH},{PH})
+                ON CONFLICT (id) DO NOTHING
             """, (sid, source, magnitude, lat, lon, depth, place, date, time, country))
-            conn.commit()
-            return True
+        else:
+            cur.execute(f"""
+                INSERT OR IGNORE INTO sismos
+                    (id, source, magnitude, lat, lon, depth, place, date, time, country)
+                VALUES ({PH},{PH},{PH},{PH},{PH},{PH},{PH},{PH},{PH},{PH})
+            """, (sid, source, magnitude, lat, lon, depth, place, date, time, country))
+        conn.commit()
+        return (cur.rowcount or 0) > 0
     except Exception as e:
-        logger.error("Error upsert sismo: %s", e)
+        logger.error("Error upsert: %s", e)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         return False
+    finally:
+        conn.close()
 
 
 def get_sismos(limit: int = 500, offset: int = 0) -> list[dict]:
-    with get_conn() as conn:
-        rows = conn.execute("""
-            SELECT * FROM sismos
-            ORDER BY date DESC, time DESC
-            LIMIT ? OFFSET ?
-        """, (limit, offset)).fetchall()
-    return [dict(r) for r in rows]
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT * FROM sismos ORDER BY date DESC, time DESC LIMIT {PH} OFFSET {PH}",
+            (limit, offset)
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
 
 
 def get_total() -> int:
-    with get_conn() as conn:
-        return conn.execute("SELECT COUNT(*) FROM sismos").fetchone()[0]
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) as cnt FROM sismos")
+        row = dict(cur.fetchone())
+        return row.get("cnt", 0)
+    finally:
+        conn.close()
 
 
 def dedup_existing() -> int:
-    """Elimina duplicados ya guardados usando ventana espaciotemporal. Retorna cuantos se borraron."""
+    """Elimina duplicados ya guardados. Retorna cuántos se borraron."""
     eliminados = 0
-    with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT id, lat, lon, date, time, magnitude FROM sismos ORDER BY first_seen ASC"
-        ).fetchall()
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, lat, lon, date, time, magnitude FROM sismos ORDER BY first_seen ASC")
+        rows = [dict(r) for r in cur.fetchall()]
         seen: list[dict] = []
         to_delete: list[str] = []
         for row in rows:
-            mag = row["magnitude"] or 0.0
+            mag = row.get("magnitude") or 0.0
             deg_tol = 1.5 if mag >= 5.0 else 0.2
             sec_tol = 900 if mag >= 5.0 else 300
             is_dup = False
             try:
                 t_new = datetime.strptime(row["time"], "%H:%M")
             except ValueError:
-                seen.append(dict(row))
+                seen.append(row)
                 continue
             for s in seen:
-                if abs(s["lat"] - row["lat"]) > deg_tol or abs(s["lon"] - row["lon"]) > deg_tol:
-                    continue
                 if s["date"] != row["date"]:
                     continue
+                if abs(s["lat"] - row["lat"]) > deg_tol or abs(s["lon"] - row["lon"]) > deg_tol:
+                    continue
                 try:
-                    t_ex = datetime.strptime(s["time"], "%H:%M")
-                    if abs((t_new - t_ex).total_seconds()) <= sec_tol:
+                    if abs((t_new - datetime.strptime(s["time"], "%H:%M")).total_seconds()) <= sec_tol:
                         is_dup = True
                         break
                 except ValueError:
@@ -152,10 +196,12 @@ def dedup_existing() -> int:
             if is_dup:
                 to_delete.append(row["id"])
             else:
-                seen.append(dict(row))
+                seen.append(row)
         for sid in to_delete:
-            conn.execute("DELETE FROM sismos WHERE id = ?", (sid,))
+            cur.execute(f"DELETE FROM sismos WHERE id = {PH}", (sid,))
             eliminados += 1
         conn.commit()
-    logger.info("dedup_existing: %d duplicados eliminados", eliminados)
+    finally:
+        conn.close()
+    logger.info("dedup_existing: %d eliminados", eliminados)
     return eliminados
