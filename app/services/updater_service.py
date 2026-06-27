@@ -1,12 +1,10 @@
-﻿"""
-Servicio de actualizacion de datos con scheduler
+"""
+Bot de ingesta sismica - feeds GeoJSON USGS + EMSC FDSNWS + FUNVISIS
 """
 
 import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
-
-VET = timezone(timedelta(hours=-4))
 from typing import Optional
 
 import aiohttp
@@ -17,30 +15,33 @@ from ..models.schemas import FunvisisCollection, SismosCollection
 from .sismos_service import SismosService
 from . import db_service
 
+VET = timezone(timedelta(hours=-4))
 
-USGS_VE_URL = (
-    "https://earthquake.usgs.gov/fdsnws/event/1/query"
-    "?format=geojson&limit=200&orderby=time&minmagnitude=1.0"
-    "&minlatitude=0.6&maxlatitude=12.5&minlongitude=-73.5&maxlongitude=-59.5"
-)
+# --- Venezuela bounding box ---
+VE_MINLAT, VE_MAXLAT =  0.6, 12.5
+VE_MINLON, VE_MAXLON = -73.5, -59.5
 
-USGS_VE_URL_30D = (
-    "https://earthquake.usgs.gov/fdsnws/event/1/query"
-    "?format=geojson&limit=1000&orderby=time&minmagnitude=1.0"
-    "&minlatitude=0.6&maxlatitude=12.5&minlongitude=-73.5&maxlongitude=-59.5"
-    "&starttime={start}&endtime={end}"
-)
+def _in_venezuela(lat: float, lon: float) -> bool:
+    return VE_MINLAT <= lat <= VE_MAXLAT and VE_MINLON <= lon <= VE_MAXLON
 
+# --- USGS GeoJSON feeds (pregenerados, sin limite de registros) ---
+USGS_FEED_HOUR  = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson"
+USGS_FEED_DAY   = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson"
+USGS_FEED_WEEK  = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_week.geojson"
+USGS_FEED_MONTH = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/1.0_month.geojson"
+
+# --- EMSC FDSNWS (complemento regional) ---
 EMSC_VE_URL = (
     "https://www.seismicportal.eu/fdsnws/event/1/query"
-    "?format=json&limit=500&orderby=time&minmagnitude=1.0"
-    "&minlatitude=0.6&maxlatitude=12.5&minlongitude=-73.5&maxlongitude=-59.5"
+    "?format=json&limit=1000&orderby=time&minmagnitude=1.0"
+    f"&minlatitude={VE_MINLAT}&maxlatitude={VE_MAXLAT}"
+    f"&minlongitude={VE_MINLON}&maxlongitude={VE_MAXLON}"
 )
-
 EMSC_VE_URL_30D = (
     "https://www.seismicportal.eu/fdsnws/event/1/query"
-    "?format=json&limit=1000&orderby=time&minmagnitude=1.0"
-    "&minlatitude=0.6&maxlatitude=12.5&minlongitude=-73.5&maxlongitude=-59.5"
+    "?format=json&limit=2000&orderby=time&minmagnitude=1.0"
+    f"&minlatitude={VE_MINLAT}&maxlatitude={VE_MAXLAT}"
+    f"&minlongitude={VE_MINLON}&maxlongitude={VE_MAXLON}"
     "&starttime={start}&endtime={end}"
 )
 
@@ -68,30 +69,45 @@ class UpdaterService:
         db_service.init_db()
 
         try:
+            # FUNVISIS cada 5 min
             self.scheduler.add_job(
                 self.update_sismos_data,
                 IntervalTrigger(seconds=self.update_interval),
-                id="update_sismos",
+                id="update_funvisis",
                 replace_existing=True,
             )
+            # Feed horario USGS cada 60 segundos (feed se actualiza cada 1 min)
             self.scheduler.add_job(
-                self._fetch_and_save_usgs,
-                IntervalTrigger(seconds=self.update_interval),
-                id="update_usgs",
+                self._fetch_usgs_feed_hour,
+                IntervalTrigger(seconds=60),
+                id="update_usgs_hour",
                 replace_existing=True,
             )
+            # Feed diario USGS cada 10 min (cubre huecos del horario)
+            self.scheduler.add_job(
+                self._fetch_usgs_feed_day,
+                IntervalTrigger(seconds=600),
+                id="update_usgs_day",
+                replace_existing=True,
+            )
+            # EMSC cada 5 min
             self.scheduler.add_job(
                 self._fetch_and_save_emsc,
                 IntervalTrigger(seconds=self.update_interval),
                 id="update_emsc",
                 replace_existing=True,
             )
+
             self.scheduler.start()
             self.is_running = True
+
+            # Carga inicial: arrancar con FUNVISIS y feeds históricos
             await self.update_sismos_data()
-            await self._fetch_and_save_usgs_historical()
+            await self._fetch_usgs_feed_month()   # historial 30 dias completo
             await self._fetch_and_save_emsc_historical()
-            self.logger.info("Scheduler iniciado. Intervalo: %ds", self.update_interval)
+            await self._fetch_usgs_feed_week()    # semana para asegurar recientes
+
+            self.logger.info("Bot sismico iniciado. USGS feed cada 60s, EMSC/FUNVISIS cada %ds", self.update_interval)
         except Exception as e:
             self.logger.error("Error al iniciar scheduler: %s", e)
             raise
@@ -105,125 +121,84 @@ class UpdaterService:
         except Exception as e:
             self.logger.error("Error al detener scheduler: %s", e)
 
-    async def update_sismos_data(self) -> bool:
-        self.logger.info("Actualizando FUNVISIS...")
-        self.update_stats["total_updates"] += 1
+    # ------------------------------------------------------------------ #
+    #  USGS GeoJSON Feeds                                                  #
+    # ------------------------------------------------------------------ #
+
+    def _parse_usgs_features(self, features: list) -> int:
+        """Filtra por Venezuela e inserta. Retorna nuevos guardados."""
+        nuevos = 0
+        for f in features:
+            props  = f.get("properties", {})
+            coords = f.get("geometry", {}).get("coordinates", [0, 0, 0])
+            try:
+                lat = float(coords[1])
+                lon = float(coords[0])
+            except (TypeError, ValueError):
+                continue
+            if not _in_venezuela(lat, lon):
+                continue
+            ts = (props.get("time") or 0) / 1000
+            try:
+                dt       = datetime.fromtimestamp(ts, tz=VET)
+                date_str = dt.strftime("%d-%m-%Y")
+                time_str = dt.strftime("%H:%M")
+            except Exception:
+                continue
+            mag   = props.get("mag") or 0
+            depth = coords[2] if len(coords) > 2 else 0
+            if db_service.upsert_sismo(
+                source="USGS",
+                magnitude=float(mag),
+                lat=lat,
+                lon=lon,
+                depth=f"{float(depth):.1f} km",
+                place=props.get("place") or "Venezuela",
+                date=date_str,
+                time=time_str,
+                country="Venezuela",
+            ):
+                nuevos += 1
+        return nuevos
+
+    async def _fetch_usgs_feed(self, url: str, label: str, timeout_s: int = 60) -> int:
         try:
-            funvisis_data = await self._download_funvisis_data()
-            if not funvisis_data:
-                self.update_stats["failed_updates"] += 1
-                return False
-
-            sismos_data = self.sismos_service.transform_funvisis_to_sismos(funvisis_data)
-
-            if self.sismos_service.save_sismos(sismos_data):
-                self.update_stats["successful_updates"] += 1
-                self.last_update = datetime.now()
-                # Guardar en registro propio
-                self._save_collection_to_db(sismos_data, source="FUNVISIS")
-                return True
-
-            self.update_stats["failed_updates"] += 1
-            return False
-        except Exception as e:
-            self.logger.error("Error FUNVISIS: %s", e)
-            self.update_stats["failed_updates"] += 1
-            self.update_stats["last_error"] = str(e)
-            return False
-
-    async def _fetch_and_save_usgs_historical(self):
-        """Carga los ultimos 30 dias de USGS al arrancar para poblar la DB rapidamente."""
-        end = datetime.now(tz=timezone.utc)
-        start = end - timedelta(days=30)
-        url = USGS_VE_URL_30D.format(
-            start=start.strftime("%Y-%m-%d"),
-            end=end.strftime("%Y-%m-%d")
-        )
-        self.logger.info("Cargando historial USGS 30 dias...")
-        try:
-            timeout = aiohttp.ClientTimeout(total=60)
+            timeout = aiohttp.ClientTimeout(total=timeout_s)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url) as resp:
                     if resp.status != 200:
-                        self.logger.error("USGS historico respondio %d", resp.status)
-                        await self._fetch_and_save_usgs()
-                        return
-                    data = await resp.json()
-            nuevos = 0
-            for f in data.get("features", []):
-                props = f.get("properties", {})
-                coords = f.get("geometry", {}).get("coordinates", [0, 0, 0])
-                ts = (props.get("time") or 0) / 1000
-                try:
-                    dt = datetime.fromtimestamp(ts, tz=VET)
-                    date_str = dt.strftime("%d-%m-%Y")
-                    time_str = dt.strftime("%H:%M")
-                except Exception:
-                    continue
-                mag = props.get("mag") or 0
-                if db_service.upsert_sismo(
-                    source="USGS",
-                    magnitude=float(mag),
-                    lat=float(coords[1]),
-                    lon=float(coords[0]),
-                    depth=f"{float(coords[2]):.1f} km",
-                    place=props.get("place") or "Venezuela",
-                    date=date_str,
-                    time=time_str,
-                    country="Venezuela",
-                ):
-                    nuevos += 1
-            self.logger.info("USGS historico: %d nuevos eventos guardados", nuevos)
+                        self.logger.error("USGS %s respondio %d", label, resp.status)
+                        return 0
+                    data = await resp.json(content_type=None)
+            nuevos = self._parse_usgs_features(data.get("features", []))
+            self.logger.info("USGS %s: %d nuevos (%d totales en feed)", label, nuevos, len(data.get("features", [])))
+            return nuevos
         except Exception as e:
-            self.logger.error("Error USGS historico: %s", e)
-            await self._fetch_and_save_usgs()
+            self.logger.error("Error USGS %s: %s", label, e)
+            return 0
 
-    async def _fetch_and_save_usgs(self):
-        self.logger.info("Actualizando USGS Venezuela...")
-        try:
-            timeout = aiohttp.ClientTimeout(total=20)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(USGS_VE_URL) as resp:
-                    if resp.status != 200:
-                        self.logger.error("USGS respondio %d", resp.status)
-                        return
-                    data = await resp.json()
+    async def _fetch_usgs_feed_hour(self):
+        await self._fetch_usgs_feed(USGS_FEED_HOUR, "hora", timeout_s=20)
 
-            nuevos = 0
-            for f in data.get("features", []):
-                props = f.get("properties", {})
-                coords = f.get("geometry", {}).get("coordinates", [0, 0, 0])
-                ts = (props.get("time") or 0) / 1000
-                try:
-                    dt = datetime.fromtimestamp(ts, tz=VET)
-                    date_str = dt.strftime("%d-%m-%Y")
-                    time_str = dt.strftime("%H:%M")
-                except Exception:
-                    continue
-                mag = props.get("mag") or 0
-                if db_service.upsert_sismo(
-                    source="USGS",
-                    magnitude=float(mag),
-                    lat=float(coords[1]),
-                    lon=float(coords[0]),
-                    depth=f"{float(coords[2]):.1f} km",
-                    place=props.get("place") or "Venezuela",
-                    date=date_str,
-                    time=time_str,
-                    country="Venezuela",
-                ):
-                    nuevos += 1
+    async def _fetch_usgs_feed_day(self):
+        await self._fetch_usgs_feed(USGS_FEED_DAY, "dia", timeout_s=30)
 
-            self.logger.info("USGS: %d nuevos eventos guardados", nuevos)
-        except Exception as e:
-            self.logger.error("Error USGS fetch: %s", e)
+    async def _fetch_usgs_feed_week(self):
+        await self._fetch_usgs_feed(USGS_FEED_WEEK, "semana", timeout_s=60)
+
+    async def _fetch_usgs_feed_month(self):
+        self.logger.info("Cargando feed USGS mes completo (puede tardar)...")
+        await self._fetch_usgs_feed(USGS_FEED_MONTH, "mes", timeout_s=120)
+
+    # ------------------------------------------------------------------ #
+    #  EMSC FDSNWS                                                         #
+    # ------------------------------------------------------------------ #
 
     def _parse_emsc_features(self, features: list, source: str) -> int:
         nuevos = 0
         for f in features:
-            props = f.get("properties", {})
+            props  = f.get("properties", {})
             coords = f.get("geometry", {}).get("coordinates", [0, 0, 0])
-            # EMSC usa segundos en 'time', no milisegundos
             raw_time = props.get("time") or props.get("lastupdate") or ""
             try:
                 if isinstance(raw_time, (int, float)):
@@ -234,7 +209,7 @@ class UpdaterService:
                 time_str = dt.strftime("%H:%M")
             except Exception:
                 continue
-            mag = props.get("mag") or props.get("magnitude") or 0
+            mag   = props.get("mag") or props.get("magnitude") or 0
             depth = coords[2] if len(coords) > 2 else 0
             place = props.get("place") or props.get("flynn_region") or "Venezuela"
             if db_service.upsert_sismo(
@@ -252,16 +227,15 @@ class UpdaterService:
         return nuevos
 
     async def _fetch_and_save_emsc_historical(self):
-        """Carga los ultimos 30 dias de EMSC al arrancar."""
-        end = datetime.now(tz=timezone.utc)
+        end   = datetime.now(tz=timezone.utc)
         start = end - timedelta(days=30)
-        url = EMSC_VE_URL_30D.format(
+        url   = EMSC_VE_URL_30D.format(
             start=start.strftime("%Y-%m-%dT%H:%M:%S"),
             end=end.strftime("%Y-%m-%dT%H:%M:%S"),
         )
         self.logger.info("Cargando historial EMSC 30 dias...")
         try:
-            timeout = aiohttp.ClientTimeout(total=60)
+            timeout = aiohttp.ClientTimeout(total=90)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url) as resp:
                     if resp.status != 200:
@@ -269,12 +243,11 @@ class UpdaterService:
                         return
                     data = await resp.json(content_type=None)
             nuevos = self._parse_emsc_features(data.get("features", []), "EMSC")
-            self.logger.info("EMSC historico: %d nuevos eventos guardados", nuevos)
+            self.logger.info("EMSC historico: %d nuevos eventos", nuevos)
         except Exception as e:
             self.logger.error("Error EMSC historico: %s", e)
 
     async def _fetch_and_save_emsc(self):
-        self.logger.info("Actualizando EMSC Venezuela...")
         try:
             timeout = aiohttp.ClientTimeout(total=20)
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -284,9 +257,34 @@ class UpdaterService:
                         return
                     data = await resp.json(content_type=None)
             nuevos = self._parse_emsc_features(data.get("features", []), "EMSC")
-            self.logger.info("EMSC: %d nuevos eventos guardados", nuevos)
+            self.logger.info("EMSC: %d nuevos eventos", nuevos)
         except Exception as e:
-            self.logger.error("Error EMSC fetch: %s", e)
+            self.logger.error("Error EMSC: %s", e)
+
+    # ------------------------------------------------------------------ #
+    #  FUNVISIS                                                            #
+    # ------------------------------------------------------------------ #
+
+    async def update_sismos_data(self) -> bool:
+        self.update_stats["total_updates"] += 1
+        try:
+            funvisis_data = await self._download_funvisis_data()
+            if not funvisis_data:
+                self.update_stats["failed_updates"] += 1
+                return False
+            sismos_data = self.sismos_service.transform_funvisis_to_sismos(funvisis_data)
+            if self.sismos_service.save_sismos(sismos_data):
+                self.update_stats["successful_updates"] += 1
+                self.last_update = datetime.now()
+                self._save_collection_to_db(sismos_data, source="FUNVISIS")
+                return True
+            self.update_stats["failed_updates"] += 1
+            return False
+        except Exception as e:
+            self.logger.error("Error FUNVISIS: %s", e)
+            self.update_stats["failed_updates"] += 1
+            self.update_stats["last_error"] = str(e)
+            return False
 
     def _save_collection_to_db(self, sismos: SismosCollection, source: str):
         nuevos = 0
@@ -310,20 +308,7 @@ class UpdaterService:
                 country=p.country,
             ):
                 nuevos += 1
-        self.logger.info("%s: %d nuevos eventos guardados en DB", source, nuevos)
-
-    async def force_update(self) -> bool:
-        await self._fetch_and_save_usgs()
-        return await self.update_sismos_data()
-
-    def get_update_status(self) -> dict:
-        return {
-            "is_running": self.is_running,
-            "update_interval": self.update_interval,
-            "last_update": self.last_update.isoformat() if self.last_update else None,
-            "stats": self.update_stats,
-            "db_total": db_service.get_total(),
-        }
+        self.logger.info("%s: %d nuevos eventos en DB", source, nuevos)
 
     async def _download_funvisis_data(self) -> Optional[FunvisisCollection]:
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -347,8 +332,20 @@ class UpdaterService:
             self.logger.error("Error descarga FUNVISIS: %s", e)
             return None
 
-    def _get_next_update_time(self) -> Optional[str]:
-        if not self.is_running or not self.last_update:
-            return None
-        from datetime import timedelta
-        return (self.last_update + timedelta(seconds=self.update_interval)).isoformat()
+    # ------------------------------------------------------------------ #
+    #  Utils                                                               #
+    # ------------------------------------------------------------------ #
+
+    async def force_update(self) -> bool:
+        await self._fetch_usgs_feed_day()
+        await self._fetch_and_save_emsc()
+        return await self.update_sismos_data()
+
+    def get_update_status(self) -> dict:
+        return {
+            "is_running": self.is_running,
+            "update_interval": self.update_interval,
+            "last_update": self.last_update.isoformat() if self.last_update else None,
+            "stats": self.update_stats,
+            "db_total": db_service.get_total(),
+        }
